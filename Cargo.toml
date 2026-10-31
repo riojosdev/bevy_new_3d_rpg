@@ -128,4 +128,5 @@ bevy_seedling = { git = "https://github.com/CorvusPrudens/bevy_seedling", branch
 bevy_perf_ui = { git = "https://github.com/olekspickle/perf_ui" }
 bevy_third_person_camera = { git = "https://github.com/olekspickle/bevy_third_person_camera" }
 bevy_ahoy = { git = "https://github.com/olekspickle/bevy_ahoy" }
+# bevy_ahoy = { path = "../../Documents/rust/bevy_ahoy" }
 

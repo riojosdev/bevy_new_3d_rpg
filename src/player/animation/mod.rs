@@ -5,10 +5,14 @@
 //!
 //! Create a new animation graph for each player, start all animations with 0 weight and add weight
 //! exponentially between frames based on input
-use super::wall_touch::ArmBones;
 use super::*;
 use bevy::world_serialization::WorldInstanceReady;
+use ik::{foot::LegBones, hand::ArmBones};
+use ragdoll::RagdollBones;
 use std::time::Duration;
+
+mod ik;
+mod ragdoll;
 
 /// Animation control knobs
 mod knobs {
@@ -17,10 +21,12 @@ mod knobs {
     pub const TRANSITION: f32 = 0.2;
     /// Use a slightly faster transition for jumps to make them feel "snappy"
     pub const JUMP_TRANSITION: f32 = 0.1;
+    /// Fraction of the idle-to-run speed that keeps running; riser bumps dip below the full one
+    pub const STOP_SPEED_FACTOR: f32 = 0.25;
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(
+    app.add_plugins((ragdoll::plugin, ik::plugin)).add_systems(
         Update,
         (calcucate_animations, animate)
             .chain()
@@ -88,12 +94,24 @@ pub fn prepare_animations(
         } else {
             warn!("could not find arm bones on player model; wall run hand IK disabled");
         }
+        if let Some(ragdoll) = RagdollBones::find(on.entity, children_q, name_q) {
+            commands.entity(player_e).insert(ragdoll);
+        } else {
+            warn!("could not find ragdoll bones on player model; ragdoll disabled");
+        }
+        if let Some(legs) = LegBones::find(on.entity, children_q, name_q) {
+            commands.entity(player_e).insert(legs);
+        } else {
+            warn!("could not find leg bones on player model; foot IK disabled");
+        }
         debug!("adding animations to player: {}", player.id);
         player.animation = Animations {
             // state: (AnimationState::StandIdle, AnimationState::StandIdle),
             current: AnimationState::StandIdle,
             requested: None,
             casting: false,
+            air_jumps: 0,
+            dashing: false,
             nodes,
             animation_player_e,
         };
@@ -108,34 +126,54 @@ pub fn prepare_animations(
 }
 
 pub fn calcucate_animations(
-    time: Res<Time>,
     cfg: Res<Config>,
+    spatial: SpatialQuery,
     mut players: Query<(
         Entity,
         &CharacterController,
         &CharacterControllerState,
         &DashState,
         &WallRunState,
+        &AirJumpState,
+        &JumpTimer,
         &Transform,
-        &mut PreviousPosition,
+        &LinearVelocity,
         &mut Player,
     )>,
     mut commands: Commands,
 ) {
     let idle_to_run_ani = cfg.player.movement.idle_to_run_threshold * 1000.0;
 
-    for (entity, ahoy, ahoy_state, dash, wall_run, pos, mut prev_pos, mut player) in
-        players.iter_mut()
+    for (
+        entity,
+        ahoy,
+        ahoy_state,
+        dash,
+        wall_run,
+        air_jump,
+        jump_timer,
+        pos,
+        velocity,
+        mut player,
+    ) in players.iter_mut()
     {
         let animation = &mut player.animation;
+        let air_jumped = air_jump.used > animation.air_jumps;
+        animation.air_jumps = air_jump.used;
+        let dash_started = dash.progress.is_some() && !animation.dashing;
+        animation.dashing = dash.progress.is_some();
 
-        let displacement = pos.translation - prev_pos.0;
-        let velocity = displacement / time.delta_secs();
-        let h_speed = Vec3::new(velocity.x, 0.0, velocity.z).length().abs();
+        // KCC velocity, unlike frame displacement, ignores step teleports and interpolation resets
+        let h_speed = velocity.xz().length();
         let v_speed = velocity.y;
-        prev_pos.0 = pos.translation;
 
-        let moving = h_speed > idle_to_run_ani;
+        // hysteresis so stair bumps don't flip Run to Idle and restart it
+        let stop_speed = if animation.current.is_moving() {
+            idle_to_run_ani * knobs::STOP_SPEED_FACTOR
+        } else {
+            idle_to_run_ani
+        };
+        let moving = h_speed > stop_speed;
         let grounded = ahoy_state.grounded.is_some();
         // tracing::debug!(
         //     "player speed: {h_speed}, idle to run threshold: {idle_to_run_ani}, grounded: {grounded}"
@@ -147,12 +185,21 @@ pub fn calcucate_animations(
             continue;
         }
 
+        if air_jumped {
+            animation.air_jump(air_jump.used);
+            continue;
+        }
+
+        if dash_started {
+            animation.dash();
+            continue;
+        }
         if dash.progress.is_some() {
             animation.request(AnimationState::Dash);
             continue;
         }
 
-        // hand reaching for the wall is layered on top in `wall_touch`
+        // hand reaching for the wall is layered on top in `ik::hand`
         if wall_run.progress.is_some() {
             animation.request(AnimationState::JumpLoop);
             continue;
@@ -162,7 +209,21 @@ pub fn calcucate_animations(
         // treat as grounded to avoid false jump animations when physics incorrectly reports ungrounded
         let treat_as_grounded =
             !grounded && h_speed < 0.1 && v_speed <= 0.1 && !animation.current.is_jumping();
-        let effectively_grounded = grounded || treat_as_grounded;
+        // stairs unground the KCC for a few frames; ground within a step below isn't a fall
+        let HitboxPreset { radius, height } = &cfg.player.hitbox;
+        let feet = height / 2.0 + radius;
+        let near_ground = spatial
+            .cast_ray(
+                pos.translation,
+                Dir3::NEG_Y,
+                feet + ahoy.step_size,
+                true,
+                &SpatialQueryFilter::from_excluded_entities([entity]),
+            )
+            .is_some();
+        // bounded by the timer since a blocked jump never lands to pause it
+        let jumped = !jump_timer.is_paused() && !jump_timer.is_finished();
+        let effectively_grounded = grounded || treat_as_grounded || !jumped && near_ground;
 
         // in the air animation
         if !effectively_grounded {
@@ -273,6 +334,7 @@ pub fn animate(
                     | AnimationState::SpellShoot
                     | AnimationState::SpellEnter
                     | AnimationState::SpellExit => active.set_speed(2.5),
+                    AnimationState::Jump => active.set_speed(2.0),
                     _ => active.set_speed(1.0),
                 };
             }
@@ -315,6 +377,10 @@ pub struct Animations {
     pub requested: Option<AnimationState>,
     /// Cast button held: Shoot loops instead of chaining into Exit
     pub casting: bool,
+    /// Last seen ahoy air jump count, to detect new air jumps
+    pub air_jumps: u8,
+    /// Whether ahoy reported a dash last frame, to detect new dashes
+    pub dashing: bool,
     /// AnimationState → Graph node
     pub nodes: Vec<AnimationNodeIndex>,
     /// Entity that owns AnimationPlayer
@@ -328,6 +394,8 @@ impl Default for Animations {
             current: AnimationState::StandIdle,
             requested: None,
             casting: false,
+            air_jumps: 0,
+            dashing: false,
             nodes: Vec::new(),
             animation_player_e: Entity::PLACEHOLDER,
         }
@@ -382,12 +450,22 @@ impl Animations {
         self.request(AnimationState::CrouchIdle);
     }
 
+    /// Bypasses the lock so a dash rolls even out of a still-playing jump or land clip
     pub fn dash(&mut self) {
-        self.request(AnimationState::Dash);
+        self.requested = Some(AnimationState::Dash);
     }
 
     pub fn fall(&mut self) {
         self.request(AnimationState::JumpLoop);
+    }
+
+    /// Bypasses the lock so each air jump restarts the jump clip, even mid-jump
+    pub fn air_jump(&mut self, count: u8) {
+        self.requested = Some(match count {
+            // TODO: distinct clips per air jump, e.g. flip on the 2nd, spin on 3rd+
+            1 => AnimationState::Jump,
+            _ => AnimationState::Jump,
+        });
     }
 
     pub fn start_jump(&mut self) {

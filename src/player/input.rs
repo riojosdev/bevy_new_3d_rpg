@@ -20,6 +20,10 @@ pub struct Sprint;
 #[action_output(bool)]
 pub struct CastSpell;
 
+#[derive(InputAction)]
+#[action_output(bool)]
+pub struct ToggleRagdoll;
+
 #[derive(Component, Default)]
 #[component(on_add = PlayerInput::on_add)]
 pub(crate) struct PlayerInput;
@@ -69,6 +73,11 @@ impl PlayerInput {
                     Action::<Dash>::new(),
                     Press::default(),
                     bindings![keys.dash[0], keys.dash[1], keys.dash[2], GamepadButton::LeftTrigger],
+                ),
+                (
+                    Action::<ToggleRagdoll>::new(),
+                    Press::default(),
+                    bindings![KeyCode::KeyR, GamepadButton::North],
                 ),
                 (
                     Action::<CastSpell>::new(),

@@ -696,7 +696,6 @@ dependencies = [
 [[package]]
 name = "bevy_ahoy"
 version = "0.2.0"
-source = "git+https://github.com/olekspickle/bevy_ahoy#9af195886ebeade600918a099901165ce0bbeff7"
 dependencies = [
  "avian3d",
  "bevy_app",
@@ -4230,9 +4229,6 @@ name = "glam"
 version = "0.30.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19fc433e8437a212d1b6f1e68c7824af3aed907da60afa994e7f542d18d12aa9"
-dependencies = [
- "bytemuck",
-]
 
 [[package]]
 name = "glam"
@@ -6040,7 +6036,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf590a9310ba69b2340562d39f0c9bddd3677130bfd24a5df22941552e791bac"
 dependencies = [
  "bytemuck",
- "glam 0.30.10",
+ "glam 0.32.1",
  "half",
  "log",
  "rdst",
@@ -7571,7 +7567,7 @@ version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c2499c2d826531388872b2268718aed907a39bd785ab0dcfe57fab26283f92e"
 dependencies = [
- "skrifa 0.40.0",
+ "skrifa 0.42.1",
  "yazi",
  "zeno",
 ]

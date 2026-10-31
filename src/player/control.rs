@@ -1,3 +1,4 @@
+use super::spell::FacingTarget;
 use super::*;
 use bevy_ahoy::CharacterLook;
 use std::f32::consts::PI;
@@ -35,12 +36,15 @@ fn movement(
     cfg: Res<Config>,
     movement: Query<&Action<Movement>>,
     camera: Single<&Transform, With<SceneCamera>>,
-    mut player_q: Query<(&mut Transform, &mut CharacterLook), Without<SceneCamera>>,
+    mut player_q: Query<
+        (&mut Transform, &mut CharacterLook, Has<FacingTarget>),
+        Without<SceneCamera>,
+    >,
 ) {
     for movement in movement.iter() {
         let movement = *movement;
 
-        for (mut pos, mut look) in player_q.iter_mut() {
+        for (mut pos, mut look, aiming) in player_q.iter_mut() {
             let input_dir = camera.movement_direction(*movement);
 
             if input_dir.length_squared() > cfg.player.movement.idle_to_run_threshold {
@@ -48,6 +52,9 @@ fn movement(
                 let (yaw, pitch, _) = camera.rotation.to_euler(EulerRot::YXZ);
                 *look = CharacterLook { yaw, pitch };
 
+                if aiming {
+                    continue;
+                }
                 // rotate model
                 let rotation = Quat::from_rotation_y(input_dir.x.atan2(input_dir.z));
                 pos.rotation = pos.rotation.slerp(rotation, 0.2);

@@ -21,6 +21,8 @@
             air_jumps: 10,
             wall_run_distance: 20,
             idle_to_run_threshold: 0.001,
+            friction_hz: 30,
+            acceleration_hz: 20,
         ),
         hitbox:(
             radius: 0.5,

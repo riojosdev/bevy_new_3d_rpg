@@ -23,15 +23,20 @@ pub fn plugin(app: &mut App) {
     app.add_observer(handle_cast_spell)
         .add_observer(handle_stop_casting)
         .add_observer(spawn_spell_projectile)
+        // writing Transform in Update resets avian's interpolation, stuttering the player
+        .add_systems(
+            FixedUpdate,
+            face_shot_direction.run_if(in_state(Screen::Gameplay)),
+        )
         .add_systems(
             Update,
-            (face_shot_direction, fly_and_expire_projectiles).run_if(in_state(Screen::Gameplay)),
+            fly_and_expire_projectiles.run_if(in_state(Screen::Gameplay)),
         );
 }
 
-/// Set on cast; [`turn_toward_facing_target`] slerps the player toward this each frame.
+/// Set on cast; [`face_shot_direction`] slerps the player toward this, overriding movement facing.
 #[derive(Component)]
-struct FacingTarget(Quat);
+pub(super) struct FacingTarget(Quat);
 
 fn handle_cast_spell(
     on: On<Start<CastSpell>>,

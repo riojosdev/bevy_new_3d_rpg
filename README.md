@@ -51,28 +51,31 @@ To set this up, follow the instructions in the [release announcement](https://be
 - [x] easy drop in scene integration using awesome [skein] with a simple scene
 - [x] custom font replace example using pre-loaded font
 - [x] simple blended animation setup with AnimationGraph & smooth AnimationTransitions
+- [x] basic IK: pin legs to stairs, pin hand to wall during wall run
+- [x] 3d particles demo: shooting magic balls, zone cube dust
+- [x] zoom in to a first person mode, zoom out to third person
 
 ### TODOs
-- [ ] 3d and 2d particles demo: shooting magic balls, fireplace, step dust
-- [ ] sullscreen effect shader demo: getting hurt by height fall?
+- [ ] steamworks integration
+- [ ] fullscreen effect shader demo: getting hurt by height fall?
 https://github.com/bevyengine/bevy/blob/release-0.18.0/assets/shaders/fullscreen_effect.wgsl
 https://github.com/bevyengine/bevy/blob/release-0.18.0/examples/shader_advanced/fullscreen_material.rs
 - [ ] spatial audio demo: boombox emitting background music
+- [ ] 2d particles demo: fireplace, step dust
+- [ ] inventory
+- [ ] modern PS/SteamDeck like item select wheel
 - [ ] remove different camera features and introduce game modes that use them automatically:
         - default to first person,
         - go third_person on some kind of transportation
         - top_down in certain ares perhaps?
-- [ ] modern PS/SteamDeck like item select wheel
-- [ ] steamworks integration
 - [ ] small door/portal demo
-- [ ] pool with light textures
+- [ ] pool with light textures (caustics)
 - [ ] split screen for local coop
 - [ ] flying around suit/mode
 - [ ] vault on objects if they are reachable
 - [ ] basic fighting: punch, kick, take weapon
 - [ ] climbing
-- [ ] rifle
-- [ ] bow
+- [ ] rifle, bow
 
 ## Run your game
 

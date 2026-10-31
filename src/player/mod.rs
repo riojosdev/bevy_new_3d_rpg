@@ -2,7 +2,7 @@ use crate::asset_loading::{AudioSources, Models};
 use crate::camera::SceneCamera;
 use crate::screens::{Escape, Screen};
 use crate::shared::{
-    AppSystems, Config, EntityExt, GameState, Settings, SettingsChanged, TransformExt,
+    AppSystems, Config, EntityExt, GameState, HitboxPreset, Settings, SettingsChanged, TransformExt,
 };
 #[cfg(feature = "third_person")]
 use crate::third_party::ThirdPersonCameraTarget;
@@ -13,7 +13,7 @@ use crate::ui::modal::{ModalInput, ModalRoot};
 use avian3d::prelude::*;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use bevy_ahoy::{CharacterLook, DashState, WallRunState, prelude::*};
+use bevy_ahoy::{AirJumpState, CharacterLook, DashState, WallRunState, prelude::*};
 use bevy_enhanced_input::prelude::*;
 use bevy_seedling::prelude::*;
 use std::time::Duration;
@@ -24,7 +24,6 @@ mod input;
 mod particles;
 mod sound;
 mod spell;
-mod wall_touch;
 
 pub use animation::*;
 pub use control::*;
@@ -46,7 +45,6 @@ pub fn plugin(app: &mut App) {
         input::plugin,
         particles::plugin,
         spell::plugin,
-        wall_touch::plugin,
     ))
     .add_systems(OnEnter(Screen::Gameplay), spawn_player)
     .add_observer(player_post_spawn);
@@ -69,7 +67,9 @@ pub fn spawn_player(
     let mesh = WorldAssetRoot(gltf.scenes[0].clone());
     let pos = Vec3::from(cfg.player.spawn_pos);
     let pos = Transform::from_translation(pos);
-    let hitbox = Capsule3d::new(cfg.player.hitbox.radius, cfg.player.hitbox.height);
+    let HitboxPreset { radius, height } = cfg.player.hitbox;
+    // parry capsules snag on stair edges, ahoy recommends cylinders; same overall height
+    let hitbox = Cylinder::new(radius, height + 2.0 * radius);
     let collider = Collider::from(hitbox);
 
     let _player = commands
@@ -77,7 +77,6 @@ pub fn spawn_player(
             DespawnOnExit(Screen::Gameplay),
             pos,
             Player::default(),
-            PreviousPosition(pos.translation),
             CharacterController {
                 crouch_height: 2.0,
                 gravity: cfg.physics.gravity,
@@ -85,6 +84,8 @@ pub fn spawn_player(
                 max_speed: cfg.player.movement.max_speed,
                 crouch_speed_scale: cfg.player.movement.crouch_factor,
                 jump_height: cfg.player.movement.jump_height,
+                friction_hz: cfg.player.movement.friction_hz,
+                acceleration_hz: cfg.player.movement.acceleration_hz,
                 ..default()
             },
             Dashing {
@@ -93,6 +94,11 @@ pub fn spawn_player(
             },
             AirJumping {
                 count: cfg.player.movement.air_jumps,
+                height: cfg.player.movement.jump_height,
+            },
+            GravityScaling {
+                apex_scale: 0.7,
+                fall_scale: 1.5,
                 ..default()
             },
             // ahoy caps wall runs by time, so derive it from distance at run speed
@@ -194,6 +200,3 @@ impl Default for Player {
         }
     }
 }
-
-#[derive(Component, Default, Deref)]
-pub struct PreviousPosition(pub Vec3);
