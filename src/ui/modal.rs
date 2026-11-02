@@ -2,101 +2,22 @@
 //!
 //! Any screen can push arbitrary content ([`push_modal`] takes any `impl Bundle`) onto the
 //! stack and expect consistent behavior: pausing gameplay and showing the cursor the first
-//! time a modal opens, keyboard/gamepad tab-cycling and select navigation ([`ModalInput`]),
+//! time a modal opens, keyboard/gamepad navigation (see [`ModalInput`]),
 //! and restoring gameplay once the stack empties again. Only the top of the stack is ever
 //! visible — pushing a new modal hides the one it covers, so popping back to it later shows
 //! the same entity again. Closing a modal (popping it) despawns it for good.
 
 use super::*;
 use crate::player::{Player, modal_ctx_active, player_ctx_active};
-use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::window::{CursorOptions, PrimaryWindow};
-use bevy_enhanced_input::prelude::*;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Modals>()
-        .add_input_context::<ModalInput>()
-        .add_systems(Startup, spawn_ctx)
         .add_observer(on_push_modal)
         .add_observer(on_pop_modal);
 }
 
-markers!(MainMenuCtx, ModalRoot);
-
-fn spawn_ctx(mut commands: Commands) {
-    commands.spawn((MainMenuCtx, ModalInput));
-}
-
-#[derive(InputAction)]
-#[action_output(Vec2)]
-pub struct NavigateModal;
-
-/// Controller element select. F.e. for inventory cell
-#[derive(Debug, InputAction)]
-#[action_output(bool)]
-pub struct Select;
-
-/// Controller tab switch right
-#[derive(Debug, InputAction)]
-#[action_output(bool)]
-pub struct CycleTab;
-
-/// Controller tab switch left
-#[derive(Debug, InputAction)]
-#[action_output(bool)]
-pub struct CycleTabBack;
-
-#[derive(Component, Default)]
-#[component(on_add = ModalInput::on_add)]
-pub(crate) struct ModalInput;
-
-impl ModalInput {
-    fn on_add(mut world: DeferredWorld, ctx: HookContext) {
-        world
-            .commands()
-            .entity(ctx.entity)
-            .insert(actions!(ModalInput[
-                (
-                    Action::<CycleTab>::new(),
-                    bindings![KeyCode::Tab, GamepadButton::RightTrigger],
-                ),
-                (
-                    Action::<CycleTabBack>::new(),
-                    ActionSettings {
-                        consume_input: true,
-                        ..Default::default()
-                    },
-                    bindings![
-                        (KeyCode::Tab).with_mod_keys(ModKeys::SHIFT),
-                        GamepadButton::LeftTrigger
-                    ],
-                ),
-                (
-                    Action::<NavigateModal>::new(),
-                    ActionSettings {
-                        require_reset: true,
-                        ..Default::default()
-                    },
-                    Bindings::spawn((
-                        Spawn((Binding::mouse_motion(), Scale::splat(0.1), Negate::all())),
-                        Axial::right_stick().with((Scale::splat(2.0), Negate::x())),
-                    )),
-                ),
-                (
-                    Action::<Select>::new(),
-                    bindings![KeyCode::Enter, GamepadButton::South, MouseButton::Left],
-                ),
-                (
-                    Action::<Escape>::new(),
-                    ActionSettings {
-                        require_reset: true,
-                        ..Default::default()
-                    },
-                    bindings![KeyCode::Escape, GamepadButton::West],
-                )
-            ]));
-    }
-}
+markers!(ModalRoot);
 
 /// Spawns `content` as a modal root and pushes it onto the [`Modals`] stack, hiding whatever
 /// it covers rather than despawning it. `entity` is the entity whose input context toggles to

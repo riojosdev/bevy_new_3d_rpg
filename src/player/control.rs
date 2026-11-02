@@ -24,6 +24,7 @@ pub fn plugin(app: &mut App) {
     )
     .add_observer(handle_sprint_in)
     .add_observer(handle_sprint_out)
+    .add_observer(toggle_walk)
     .add_observer(face_dash_direction)
     .add_observer(handle_jump)
     .add_observer(handle_land)
@@ -94,6 +95,21 @@ fn handle_sprint_out(
     {
         ahoy.speed = cfg.player.movement.speed();
     }
+}
+
+fn toggle_walk(
+    on: On<Start<ToggleWalk>>,
+    cfg: Res<Config>,
+    mut ahoy_q: Query<&mut CharacterController>,
+) -> Result {
+    let movement = &cfg.player.movement;
+    let mut ahoy = ahoy_q.get_mut(on.context)?;
+    ahoy.speed = if ahoy.speed < movement.speed() {
+        movement.speed()
+    } else {
+        movement.walk_speed()
+    };
+    Ok(())
 }
 
 fn face_dash_direction(

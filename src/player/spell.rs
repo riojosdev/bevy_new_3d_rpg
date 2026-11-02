@@ -1,6 +1,7 @@
 //! Casts a simple magic bolt: `CastSpell` plays the Enter→Shoot→Exit animation sequence (Shoot
 //! repeats while held), and each time the Shoot node starts (see [`SpellShootFrame`]) a
 //! `CosmicSphere`-shaded projectile launches from the player's hand bone along the camera's forward.
+use super::animation::MAX_TWIST;
 use super::*;
 use crate::scene::{
     CosmicSphere, CosmicSphereExtension, CosmicSphereMaterial, CosmicSphereUniforms,
@@ -41,12 +42,12 @@ pub(super) struct FacingTarget(Quat);
 fn handle_cast_spell(
     on: On<Start<CastSpell>>,
     camera: Single<&Transform, With<SceneCamera>>,
-    mut player_q: Query<&mut Player>,
+    mut player_q: Query<(&mut Player, &Transform)>,
     mut commands: Commands,
 ) -> Result {
-    let mut player = player_q.get_mut(on.context)?;
+    let (mut player, body) = player_q.get_mut(on.context)?;
     player.animation.cast_spell();
-    face_camera(on.context, &camera, &mut commands);
+    face_camera(on.context, body, &camera, &mut commands);
     Ok(())
 }
 
@@ -55,10 +56,12 @@ fn handle_stop_casting(on: On<Complete<CastSpell>>, mut player_q: Query<&mut Pla
     Ok(())
 }
 
-fn face_camera(player: Entity, camera: &Transform, commands: &mut Commands) {
+/// Turns the body only when the aim is beyond what the spine twist covers.
+fn face_camera(player: Entity, body: &Transform, camera: &Transform, commands: &mut Commands) {
     let forward = camera.forward();
     let direction = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-    if direction != Vec3::ZERO {
+    // model faces +Z
+    if direction != Vec3::ZERO && direction.angle_between(body.rotation * Vec3::Z) > MAX_TWIST {
         let target = Quat::from_rotation_y(direction.x.atan2(direction.z));
         commands.entity(player).insert(FacingTarget(target));
     }
@@ -85,18 +88,18 @@ struct SpellProjectile {
 
 fn spawn_spell_projectile(
     on: On<SpellShootFrame>,
-    players: Query<&Player>,
+    players: Query<(&Player, &Transform)>,
     transforms: Query<&GlobalTransform>,
     camera: Single<&Transform, With<SceneCamera>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<CosmicSphereMaterial>>,
 ) -> Result {
-    let player = players.get(on.event_target())?;
+    let (player, body) = players.get(on.event_target())?;
     let origin = transforms.get(player.hand)?.translation();
     let direction = *camera.forward();
     // re-aim each shot of a held cast
-    face_camera(on.event_target(), &camera, &mut commands);
+    face_camera(on.event_target(), body, &camera, &mut commands);
 
     let material = materials.add(CosmicSphereMaterial {
         base: StandardMaterial {

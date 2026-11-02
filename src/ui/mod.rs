@@ -10,6 +10,7 @@ use bevy::{ecs::spawn::SpawnRelated, ui::Val::*, ui_widgets::Button};
 use bevy_seedling::prelude::*;
 
 mod constants;
+mod input;
 mod interaction;
 pub mod modal;
 
@@ -21,12 +22,14 @@ pub mod text_edit;
 pub mod widget;
 
 pub use constants::*;
+pub use input::*;
 pub use modal::*;
 pub use prefabs::*;
 pub use props::*;
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((
+        input::plugin,
         prefabs::plugin,
         interaction::plugin,
         text_edit::plugin,

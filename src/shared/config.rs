@@ -60,12 +60,15 @@ pub struct MovementPreset {
     pub jump_height: f32,
     pub sprint_factor: f32,
     pub crouch_factor: f32,
+    pub walk_factor: f32,
     pub dash_distance: f32,
     pub air_jumps: u8,
     pub wall_run_distance: f32,
     pub idle_to_run_threshold: f32,
     pub friction_hz: f32,
     pub acceleration_hz: f32,
+    /// Distance walked between hand touches on a nearby wall
+    pub hand_lock_distance: f32,
 }
 
 impl MovementPreset {
@@ -77,6 +80,9 @@ impl MovementPreset {
     }
     pub fn crouch_speed(&self) -> f32 {
         self.speed() * self.crouch_factor
+    }
+    pub fn walk_speed(&self) -> f32 {
+        self.speed() * self.walk_factor
     }
 }
 

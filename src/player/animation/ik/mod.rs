@@ -3,9 +3,10 @@ use super::*;
 
 pub mod foot;
 pub mod hand;
+pub mod look;
 
 pub fn plugin(app: &mut App) {
-    app.add_plugins((hand::plugin, foot::plugin));
+    app.add_plugins((hand::plugin, foot::plugin, look::plugin));
 }
 
 /// Analytic two-bone IK; returns local rotation deltas for the upper and lower bone.

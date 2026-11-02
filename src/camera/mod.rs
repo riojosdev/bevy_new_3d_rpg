@@ -15,7 +15,6 @@ use bevy::{
     prelude::*,
 };
 
-// mod gamepad_cursor;
 mod hdr;
 #[cfg(feature = "third_person")]
 mod third_person;
@@ -24,7 +23,6 @@ mod top_down;
 
 pub fn plugin(app: &mut App) {
     app.add_plugins(hdr::plugin)
-        // app.add_plugins((hdr::plugin, gamepad_cursor::plugin))
         .add_systems(Startup, spawn_camera)
         .add_observer(on_toggle_cam_cursor);
 

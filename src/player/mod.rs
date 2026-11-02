@@ -9,7 +9,7 @@ use crate::third_party::ThirdPersonCameraTarget;
 #[cfg(feature = "top_down")]
 use crate::third_party::TopDownCameraTarget;
 use crate::timers;
-use crate::ui::modal::{ModalInput, ModalRoot};
+use crate::ui::{ModalInput, ModalRoot};
 use avian3d::prelude::*;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -86,6 +86,8 @@ pub fn spawn_player(
                 jump_height: cfg.player.movement.jump_height,
                 friction_hz: cfg.player.movement.friction_hz,
                 acceleration_hz: cfg.player.movement.acceleration_hz,
+                standing_view_height: 1.5,
+                crouch_view_height: 1.0,
                 ..default()
             },
             Dashing {

@@ -6,8 +6,12 @@
 //! Create a new animation graph for each player, start all animations with 0 weight and add weight
 //! exponentially between frames based on input
 use super::*;
+use bevy::animation::{ActiveAnimation, AnimationTargetId};
+use bevy::platform::collections::HashSet;
 use bevy::world_serialization::WorldInstanceReady;
-use ik::{foot::LegBones, hand::ArmBones};
+use ik::{foot::LegBones, hand::ArmBones, look::LookBones};
+
+pub use ik::look::MAX_TWIST;
 use ragdoll::RagdollBones;
 use std::time::Duration;
 
@@ -23,6 +27,10 @@ mod knobs {
     pub const JUMP_TRANSITION: f32 = 0.1;
     /// Fraction of the idle-to-run speed that keeps running; riser bumps dip below the full one
     pub const STOP_SPEED_FACTOR: f32 = 0.25;
+    pub const CAST_SPEED: f32 = 2.5;
+    pub const CAST_BLEND_RATE: f32 = 12.0;
+    /// Upper-body share the spell layer takes over locomotion
+    pub const MAX_CAST_SHARE: f32 = 0.97;
 }
 
 pub fn plugin(app: &mut App) {
@@ -36,6 +44,9 @@ pub fn plugin(app: &mut App) {
 
 /// Bone used as the spawn point for spell projectiles (see [`SpellShootFrame`]).
 const HAND_BONE: &str = "DEF-handL";
+/// Root of the bones the spell layer animates
+const UPPER_BODY: &str = "DEF-spine001";
+const LOWER_BODY_GROUP: u32 = 0;
 
 /// Build animation graph when scene loads
 pub fn prepare_animations(
@@ -44,6 +55,7 @@ pub fn prepare_animations(
     gltfs: Res<Assets<Gltf>>,
     children_q: Query<&Children>,
     name_q: Query<&Name>,
+    targets_q: Query<&AnimationTargetId>,
     animation_player_q: Query<Entity, With<AnimationPlayer>>,
     mut animation_players: Query<&mut AnimationPlayer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
@@ -75,9 +87,32 @@ pub fn prepare_animations(
         gltf.named_animations["Spell_Simple_Enter"].clone(),
         gltf.named_animations["Spell_Simple_Exit"].clone(),
         gltf.named_animations["Spell_Simple_Shoot"].clone(),
+        gltf.named_animations["Walk_Loop"].clone(),
     ];
 
-    let (graph, nodes) = AnimationGraph::from_clips(clips);
+    let (mut graph, nodes) = AnimationGraph::from_clips(clips);
+    // spell clips skip the lower body so legs keep running while casting
+    if let Some(spine) = on.entity.get_by_name(children_q, name_q, UPPER_BODY) {
+        let upper: HashSet<Entity> = children_q.iter_descendants(spine).chain([spine]).collect();
+        for bone in children_q.iter_descendants(on.entity) {
+            if !upper.contains(&bone)
+                && let Ok(target) = targets_q.get(bone)
+            {
+                graph.add_target_to_mask_group(*target, LOWER_BODY_GROUP);
+            }
+        }
+        for state in [
+            AnimationState::SpellEnter,
+            AnimationState::SpellShoot,
+            AnimationState::SpellExit,
+        ] {
+            if let Some(node) = graph.get_mut(nodes[state.idx()]) {
+                node.add_mask(1 << LOWER_BODY_GROUP);
+            }
+        }
+    } else {
+        warn!("could not find bone \"{UPPER_BODY}\" on player model; spells animate the full body");
+    }
     let graph_handle = graphs.add(graph);
 
     commands
@@ -104,16 +139,18 @@ pub fn prepare_animations(
         } else {
             warn!("could not find leg bones on player model; foot IK disabled");
         }
+        if let Some(look) = LookBones::find(on.entity, children_q, name_q) {
+            commands.entity(player_e).insert(look);
+        } else {
+            warn!("could not find spine bones on player model; look twist disabled");
+        }
         debug!("adding animations to player: {}", player.id);
         player.animation = Animations {
             // state: (AnimationState::StandIdle, AnimationState::StandIdle),
             current: AnimationState::StandIdle,
-            requested: None,
-            casting: false,
-            air_jumps: 0,
-            dashing: false,
             nodes,
             animation_player_e,
+            ..Default::default()
         };
         if let Some(hand) = hand {
             player.hand = hand;
@@ -272,6 +309,12 @@ pub fn calcucate_animations(
             continue;
         }
 
+        // WALK, toggled by lowering the controller speed
+        if moving && ahoy.speed < cfg.player.movement.speed() {
+            animation.request(AnimationState::Walk(ahoy.speed));
+            continue;
+        }
+
         // and finally RUN\IDLE
         if moving {
             animation.request(AnimationState::Run(ahoy.speed));
@@ -282,6 +325,7 @@ pub fn calcucate_animations(
 }
 
 pub fn animate(
+    time: Res<Time>,
     mut commands: Commands,
     mut players: Query<(Entity, &mut Player)>,
     mut animation_players: Query<&mut AnimationPlayer>,
@@ -318,10 +362,6 @@ pub fn animate(
                 animation_player.animation_mut(node).map(|a| a.repeat());
             }
 
-            if next == AnimationState::SpellShoot {
-                commands.entity(entity).trigger(SpellShootFrame);
-            }
-
             // Set speed on the NEW animation, not the old one
             let next_node = ani.nodes[next.idx()];
             if let Some(active) = animation_player.animation_mut(next_node) {
@@ -329,11 +369,7 @@ pub fn animate(
                     AnimationState::Run(s)
                     | AnimationState::Sprint(s)
                     | AnimationState::Crouch(s) => active.set_speed(s * knobs::DAMPING),
-                    AnimationState::Land
-                    | AnimationState::Dash
-                    | AnimationState::SpellShoot
-                    | AnimationState::SpellEnter
-                    | AnimationState::SpellExit => active.set_speed(2.5),
+                    AnimationState::Land | AnimationState::Dash => active.set_speed(2.5),
                     AnimationState::Jump => active.set_speed(2.0),
                     _ => active.set_speed(1.0),
                 };
@@ -351,11 +387,6 @@ pub fn animate(
                 let chained = match ani.current {
                     AnimationState::Jump => Some(AnimationState::JumpLoop),
                     AnimationState::Land | AnimationState::Dash => Some(AnimationState::StandIdle),
-                    AnimationState::SpellEnter => Some(AnimationState::SpellShoot),
-                    AnimationState::SpellShoot if ani.casting => Some(AnimationState::SpellShoot),
-                    AnimationState::SpellShoot => Some(AnimationState::SpellExit),
-                    AnimationState::SpellExit if ani.casting => Some(AnimationState::SpellEnter),
-                    AnimationState::SpellExit => Some(AnimationState::StandIdle),
                     _ => None,
                 };
 
@@ -364,6 +395,50 @@ pub fn animate(
                     ani.requested = Some(next);
                 }
             }
+        }
+
+        // spell layer: restarted per phase outside `transitions`, which only fades locomotion
+        if let Some(next) = ani.cast_requested.take() {
+            if let Some(prev) = ani.cast {
+                animation_player.stop(ani.nodes[prev.idx()]);
+            }
+            animation_player
+                .start(ani.nodes[next.idx()])
+                .set_speed(knobs::CAST_SPEED);
+            if next == AnimationState::SpellShoot {
+                commands.entity(entity).trigger(SpellShootFrame);
+            }
+            ani.cast = Some(next);
+        }
+        let Some(phase) = ani.cast else {
+            continue;
+        };
+        let node = ani.nodes[phase.idx()];
+        let finished = animation_player
+            .animation(node)
+            .is_none_or(ActiveAnimation::is_finished);
+        let chained = match phase {
+            AnimationState::SpellEnter => Some(AnimationState::SpellShoot),
+            AnimationState::SpellShoot if ani.casting => Some(AnimationState::SpellShoot),
+            AnimationState::SpellShoot => Some(AnimationState::SpellExit),
+            AnimationState::SpellExit if ani.casting => Some(AnimationState::SpellEnter),
+            _ => None,
+        };
+        if finished {
+            ani.cast_requested = chained;
+        }
+        let done = finished && chained.is_none();
+        let goal = if done { 0.0 } else { 1.0 };
+        ani.cast_weight +=
+            (goal - ani.cast_weight) * (1.0 - (-knobs::CAST_BLEND_RATE * time.delta_secs()).exp());
+        if done && ani.cast_weight < 0.01 {
+            animation_player.stop(node);
+            ani.cast = None;
+            ani.cast_weight = 0.0;
+        } else if let Some(active) = animation_player.animation_mut(node) {
+            // blends average by weight and locomotion weights sum to 1
+            let share = ani.cast_weight.min(knobs::MAX_CAST_SHARE);
+            active.set_weight(share / (1.0 - share));
         }
     }
 }
@@ -375,6 +450,11 @@ pub struct Animations {
     // pub state: (AnimationState, AnimationState),
     pub current: AnimationState,
     pub requested: Option<AnimationState>,
+    /// Spell phase on the upper-body layer, independent of `current`
+    pub cast: Option<AnimationState>,
+    pub cast_requested: Option<AnimationState>,
+    /// Upper-body blend of the spell layer, 0..1
+    pub cast_weight: f32,
     /// Cast button held: Shoot loops instead of chaining into Exit
     pub casting: bool,
     /// Last seen ahoy air jump count, to detect new air jumps
@@ -393,6 +473,9 @@ impl Default for Animations {
             // state: (AnimationState::StandIdle, AnimationState::StandIdle),
             current: AnimationState::StandIdle,
             requested: None,
+            cast: None,
+            cast_requested: None,
+            cast_weight: 0.0,
             casting: false,
             air_jumps: 0,
             dashing: false,
@@ -407,10 +490,7 @@ impl Animations {
     fn request(&mut self, state: AnimationState) {
         let is_moving = self.current.is_moving();
         let is_jumping_to_land = self.current.is_jumping() && matches!(state, AnimationState::Land);
-        let requested_is_movement = matches!(
-            state,
-            AnimationState::Run(_) | AnimationState::Sprint(_) | AnimationState::Crouch(_)
-        );
+        let requested_is_movement = state.is_moving();
         let same_clip = self.current.idx() == state.idx();
         let is_locked = self.current.is_locked();
 
@@ -479,7 +559,9 @@ impl Animations {
     /// until [`Self::stop_casting`], and fires [`SpellShootFrame`] each time Shoot begins.
     pub fn cast_spell(&mut self) {
         self.casting = true;
-        self.request(AnimationState::SpellEnter);
+        if self.cast.is_none() {
+            self.cast_requested = Some(AnimationState::SpellEnter);
+        }
     }
     pub fn stop_casting(&mut self) {
         self.casting = false;
@@ -508,6 +590,7 @@ pub enum AnimationState {
     SpellEnter,
     SpellExit,
     SpellShoot,
+    Walk(f32),
 }
 impl AnimationState {
     pub fn idx(&self) -> usize {
@@ -524,6 +607,7 @@ impl AnimationState {
             AnimationState::SpellEnter => 9,
             AnimationState::SpellExit => 10,
             AnimationState::SpellShoot => 11,
+            AnimationState::Walk(_) => 12,
         }
     }
 
@@ -531,12 +615,7 @@ impl AnimationState {
     pub fn is_locked(&self) -> bool {
         matches!(
             self,
-            AnimationState::Jump
-                | AnimationState::Land
-                | AnimationState::Dash
-                | AnimationState::SpellEnter
-                | AnimationState::SpellExit
-                | AnimationState::SpellShoot
+            AnimationState::Jump | AnimationState::Land | AnimationState::Dash
         )
     }
     pub fn can_crouch(&self) -> bool {
@@ -569,7 +648,10 @@ impl AnimationState {
     pub fn is_moving(&self) -> bool {
         matches!(
             self,
-            AnimationState::Run(_) | AnimationState::Sprint(_) | AnimationState::Crouch(_)
+            AnimationState::Run(_)
+                | AnimationState::Walk(_)
+                | AnimationState::Sprint(_)
+                | AnimationState::Crouch(_)
         )
     }
 }
@@ -593,6 +675,7 @@ mod animation_state_tests {
         AnimationState::SpellEnter,
         AnimationState::SpellExit,
         AnimationState::SpellShoot,
+        AnimationState::Walk(1.0),
     ];
 
     #[test]

@@ -98,7 +98,10 @@ fn enter_first_person(
         commands
             .entity(camera)
             .remove::<ThirdPersonCamera>()
-            .insert(CharacterControllerCameraOf::new(*player));
+            .insert(CharacterControllerCameraOf {
+                horizontal_offset: Vec2::new(0.0, 0.5),
+                ..CharacterControllerCameraOf::new(*player)
+            });
     }
 }
 

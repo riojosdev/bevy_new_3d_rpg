@@ -1,4 +1,5 @@
-//! Wall run hand IK: a two-bone solve over the animated pose plants the wall-side hand on the wall.
+//! Hand IK over the animated pose: on wall runs the wall-side hand takes the shortest path to the wall,
+//! and while walking the hand nearest a wall briefly touches it every `hand_lock_distance`.
 use super::*;
 use bevy::app::AnimationSystems;
 use bevy::ecs::system::ParamSet;
@@ -6,9 +7,17 @@ use bevy::transform::{TransformSystems, helper::TransformHelper};
 
 mod knobs {
     pub const MAX_REACH: f32 = 1.5;
+    /// Walking only reaches for walls about an arm's length away
+    pub const WALK_REACH: f32 = 0.7;
+    /// Walking touches start this far ahead of the shoulder, so the slower reach lands beside it
+    pub const TOUCH_AHEAD: f32 = 0.5;
+    /// Hits whose normal leans further from horizontal aren't walls
+    pub const MAX_WALL_NORMAL_Y: f32 = 0.3;
     /// Keeps the palm just off the surface
-    pub const WALL_OFFSET: f32 = 0.05;
+    pub const WALL_OFFSET: f32 = 0.1;
     pub const BLEND_RATE: f32 = 12.0;
+    /// Slower reach and release for walking touches
+    pub const WALK_BLEND_RATE: f32 = 4.0;
 }
 
 const LEFT_ARM: [&str; 3] = ["DEF-upper_armL", "DEF-forearmL", "DEF-handL"];
@@ -31,6 +40,10 @@ pub struct ArmBones {
     weight: f32,
     /// Arm index and world-space hand target, kept while blending out
     target: Option<(usize, Vec3)>,
+    /// Player position when the walking hand last locked
+    locked_at: Vec3,
+    /// Arm picked when the wall run started, so hands don't swap mid-run
+    wall_run_side: Option<usize>,
 }
 
 impl ArmBones {
@@ -45,26 +58,100 @@ impl ArmBones {
             arms,
             weight: 0.0,
             target: None,
+            locked_at: Vec3::ZERO,
+            wall_run_side: None,
         })
     }
 }
 
-fn touch_wall(
+pub(super) fn touch_wall(
     time: Res<Time>,
+    cfg: Res<Config>,
     spatial: SpatialQuery,
-    mut players: Query<(Entity, &WallRunState, &mut ArmBones)>,
+    mut players: Query<(
+        Entity,
+        &Position,
+        &LinearVelocity,
+        &CharacterControllerState,
+        &WallRunState,
+        &Player,
+        &mut ArmBones,
+    )>,
     mut transforms: ParamSet<(TransformHelper, Query<&mut Transform>)>,
 ) {
-    for (player, wall_run, mut bones) in &mut players {
-        let reach = wall_run.progress.as_ref().and_then(|progress| {
-            wall_target(player, *progress.normal, &bones, &spatial, &transforms.p0())
-        });
+    let lock_distance = cfg.player.movement.hand_lock_distance;
+    for (player, position, velocity, state, wall_run, Player { animation, .. }, mut bones) in
+        &mut players
+    {
+        let Some(shoulders) = shoulders(&bones, &transforms.p0()) else {
+            continue;
+        };
+        let filter = SpatialQueryFilter::from_excluded_entities([player]);
+        // (distance, hand target) on a wall along `dir`
+        let touch = |from: Vec3, dir: Vec3, reach: f32| {
+            let hit = spatial.cast_ray(from, Dir3::new(dir).ok()?, reach, true, &filter)?;
+            (hit.normal.y.abs() < knobs::MAX_WALL_NORMAL_Y).then(|| {
+                let target = from + dir * hit.distance + hit.normal * knobs::WALL_OFFSET;
+                (hit.distance, target)
+            })
+        };
+        let walking =
+            state.grounded.is_some() && matches!(animation.current, AnimationState::Walk(_));
+
+        let reach = if let Some(progress) = &wall_run.progress {
+            let into = -*progress.normal;
+            let side = *bones
+                .wall_run_side
+                .get_or_insert(usize::from(shoulders[1].dot(into) > shoulders[0].dot(into)));
+            // closest point on the wall, recomputed every frame so the hand slides along it
+            let shoulder = shoulders[side];
+            spatial
+                .project_point(shoulder, true, &filter)
+                .filter(|hit| hit.point.distance(shoulder) < knobs::MAX_REACH)
+                .map(|hit| {
+                    let out = (shoulder - hit.point).normalize_or(-into);
+                    (side, hit.point + out * knobs::WALL_OFFSET)
+                })
+        } else if walking {
+            bones.wall_run_side = None;
+            if position.distance(bones.locked_at) < lock_distance {
+                // hold the touch until the body walks past it, then the animation takes over
+                bones.target.filter(|(side, target)| {
+                    shoulders[*side].distance(*target) < knobs::WALK_REACH + knobs::TOUCH_AHEAD
+                })
+            } else {
+                let ahead = velocity.with_y(0.0).normalize_or_zero() * knobs::TOUCH_AHEAD;
+                let outward = (shoulders[0] - shoulders[1])
+                    .with_y(0.0)
+                    .normalize_or_zero();
+                let touched = [(0, outward), (1, -outward)]
+                    .into_iter()
+                    .filter_map(|(side, dir)| {
+                        let (distance, target) =
+                            touch(shoulders[side] + ahead, dir, knobs::WALK_REACH)?;
+                        Some((distance, (side, target)))
+                    })
+                    .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                    .map(|(_, reach)| reach);
+                if touched.is_some() {
+                    bones.locked_at = position.0;
+                }
+                touched
+            }
+        } else {
+            bones.wall_run_side = None;
+            None
+        };
         let goal = if reach.is_some() { 1.0 } else { 0.0 };
         if reach.is_some() {
             bones.target = reach;
         }
-        bones.weight +=
-            (goal - bones.weight) * (1.0 - (-knobs::BLEND_RATE * time.delta_secs()).exp());
+        let rate = if wall_run.progress.is_some() {
+            knobs::BLEND_RATE
+        } else {
+            knobs::WALK_BLEND_RATE
+        };
+        bones.weight += (goal - bones.weight) * (1.0 - (-rate * time.delta_secs()).exp());
 
         let Some((side, target)) = bones.target else {
             continue;
@@ -95,36 +182,12 @@ fn touch_wall(
     }
 }
 
-/// Raycasts from the shoulder nearest the wall; `None` when the wall is out of reach.
-fn wall_target(
-    player: Entity,
-    normal: Vec3,
-    bones: &ArmBones,
-    spatial: &SpatialQuery,
-    helper: &TransformHelper,
-) -> Option<(usize, Vec3)> {
-    let shoulders = bones.arms.map(|[upper, ..]| {
+fn shoulders(bones: &ArmBones, helper: &TransformHelper) -> Option<[Vec3; 2]> {
+    let [left, right] = bones.arms.map(|[upper, ..]| {
         helper
             .compute_global_transform(upper)
             .ok()
             .map(|g| g.translation())
     });
-    let (side, shoulder) = shoulders
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, s)| Some((i, s?)))
-        .max_by(|(_, x), (_, y)| x.dot(-normal).total_cmp(&y.dot(-normal)))?;
-
-    let filter = SpatialQueryFilter::from_excluded_entities([player]);
-    let hit = spatial.cast_ray(
-        shoulder,
-        Dir3::new(-normal).ok()?,
-        knobs::MAX_REACH,
-        true,
-        &filter,
-    )?;
-    Some((
-        side,
-        shoulder - normal * hit.distance + normal * knobs::WALL_OFFSET,
-    ))
+    Some([left?, right?])
 }

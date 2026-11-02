@@ -24,6 +24,10 @@ pub struct CastSpell;
 #[action_output(bool)]
 pub struct ToggleRagdoll;
 
+#[derive(InputAction)]
+#[action_output(bool)]
+pub struct ToggleWalk;
+
 #[derive(Component, Default)]
 #[component(on_add = PlayerInput::on_add)]
 pub(crate) struct PlayerInput;
@@ -78,6 +82,11 @@ impl PlayerInput {
                     Action::<ToggleRagdoll>::new(),
                     Press::default(),
                     bindings![KeyCode::KeyR, GamepadButton::North],
+                ),
+                (
+                    Action::<ToggleWalk>::new(),
+                    Press::default(),
+                    bindings![KeyCode::CapsLock, GamepadButton::DPadDown],
                 ),
                 (
                     Action::<CastSpell>::new(),
